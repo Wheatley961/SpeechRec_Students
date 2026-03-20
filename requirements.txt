@@ -1,11 +1,6 @@
 streamlit
 faster-whisper
-vosk
-transformers
-torch
-torchaudio
 librosa
 soundfile
 numpy
-sentencepiece
 deep-translator

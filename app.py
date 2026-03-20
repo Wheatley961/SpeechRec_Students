@@ -2,23 +2,20 @@ import streamlit as st
 import tempfile
 import numpy as np
 import librosa
+import time
 
-# Engines
 from faster_whisper import WhisperModel
-from vosk import Model as VoskModel, KaldiRecognizer
-import wave
-import json
-
-from transformers import pipeline
 from deep_translator import GoogleTranslator
 
-st.set_page_config(page_title="Multi Speech-to-Text", layout="wide")
+st.set_page_config(page_title="Whisper Pro", layout="wide")
 
-st.title("🎙️ Multi Speech Recognition Platform")
+st.title("🎙️ Whisper Speech Platform")
 
 # =========================
-# ЯЗЫКИ (человеческие)
+# НАСТРОЙКИ
 # =========================
+models = ["tiny", "base", "small", "medium"]
+
 languages = {
     "Авто": None,
     "Русский": "ru",
@@ -28,83 +25,32 @@ languages = {
     "Испанский": "es"
 }
 
-# =========================
-# ВЫБОР ДВИЖКА
-# =========================
-engine = st.selectbox(
-    "Выберите движок",
-    ["faster-whisper", "vosk", "wav2vec2"]
-)
-
-# =========================
-# ВЫБОР МОДЕЛИ
-# =========================
-if engine == "faster-whisper":
-    model_name = st.selectbox("Модель", ["tiny", "base", "small", "medium"])
-
-elif engine == "vosk":
-    st.info("Язык будет определён автоматически")
-    model_name = None
-
-elif engine == "wav2vec2":
-    st.info("Язык будет определён автоматически")
-    model_name = None
-
-# =========================
-# ЯЗЫК (только для whisper)
-# =========================
-lang_display = st.selectbox("Язык (для Whisper)", list(languages.keys()))
-lang_code = languages[lang_display]
-
-# =========================
-# ПЕРЕВОД
-# =========================
-translate_to = st.selectbox(
-    "Перевести в",
-    ["Не переводить", "Русский", "Английский", "Немецкий"]
-)
-
 translate_map = {
     "Русский": "ru",
     "Английский": "en",
     "Немецкий": "de"
 }
 
-# =========================
-# МАППИНГ МОДЕЛЕЙ
-# =========================
-vosk_models = {
-    "ru": "vosk-model-small-ru",
-    "en": "vosk-model-small-en-us"
-}
+model_size = st.selectbox("Модель", models)
+lang_display = st.selectbox("Язык", list(languages.keys()))
+lang_code = languages[lang_display]
 
-wav2vec_models = {
-    "ru": "jonatasgrosman/wav2vec2-large-xlsr-53-russian",
-    "en": "facebook/wav2vec2-base-960h"
-}
+translate_to = st.selectbox(
+    "Перевести в",
+    ["Не переводить", "Русский", "Английский", "Немецкий"]
+)
 
-# =========================
-# ЗАГРУЗКА
-# =========================
 uploaded_file = st.file_uploader("Загрузите аудио", type=["wav", "mp3"])
 
 # =========================
-# КЭШИРОВАНИЕ МОДЕЛЕЙ
+# КЭШ
 # =========================
 @st.cache_resource
-def load_whisper(model_name):
-    return WhisperModel(model_name, compute_type="int8")
-
-@st.cache_resource
-def load_lang_detector():
-    return WhisperModel("tiny", compute_type="int8")
-
-@st.cache_resource
-def load_wav2vec(model_name):
-    return pipeline("automatic-speech-recognition", model=model_name)
+def load_model(size):
+    return WhisperModel(size, compute_type="int8")
 
 # =========================
-# ЗАГРУЗКА АУДИО
+# АУДИО
 # =========================
 def load_audio(file):
     with tempfile.NamedTemporaryFile(delete=False) as tmp:
@@ -112,72 +58,34 @@ def load_audio(file):
         path = tmp.name
 
     audio, sr = librosa.load(path, sr=16000)
-    return audio, path
+    duration = len(audio) / sr
+
+    return audio, duration
 
 # =========================
-# ОПРЕДЕЛЕНИЕ ЯЗЫКА
+# ПСЕВДО СПИКЕРЫ
 # =========================
-def detect_language(audio):
-    model = load_lang_detector()
-    segments, info = model.transcribe(audio)
-    return info.language
+def assign_speakers(segments):
+    speakers = []
+    current_speaker = 1
 
-# =========================
-# WHISPER
-# =========================
-def transcribe_whisper(audio):
-    model = load_whisper(model_name)
-
-    segments, info = model.transcribe(
-        audio,
-        language=lang_code
-    )
-
-    result_text = ""
-    segments_data = []
+    prev_end = 0
 
     for seg in segments:
-        text = seg.text
-        result_text += text + " "
-        segments_data.append({
+        # если пауза > 1.5 сек → новый спикер
+        if seg.start - prev_end > 1.5:
+            current_speaker += 1
+
+        speakers.append({
+            "speaker": f"Speaker {current_speaker}",
             "start": seg.start,
             "end": seg.end,
-            "text": text
+            "text": seg.text
         })
 
-    return result_text, segments_data
+        prev_end = seg.end
 
-# =========================
-# VOSK
-# =========================
-def transcribe_vosk(path, model_name):
-    wf = wave.open(path, "rb")
-    model = VoskModel(model_name)
-
-    rec = KaldiRecognizer(model, wf.getframerate())
-
-    result_text = ""
-
-    while True:
-        data = wf.readframes(4000)
-        if len(data) == 0:
-            break
-        if rec.AcceptWaveform(data):
-            res = json.loads(rec.Result())
-            result_text += res.get("text", "") + " "
-
-    final = json.loads(rec.FinalResult())
-    result_text += final.get("text", "")
-
-    return result_text, None
-
-# =========================
-# WAV2VEC2
-# =========================
-def transcribe_wav2vec(audio, model_name):
-    pipe = load_wav2vec(model_name)
-    result = pipe(audio)
-    return result["text"], None
+    return speakers
 
 # =========================
 # ПЕРЕВОД
@@ -188,12 +96,7 @@ def translate_text(text):
 
     target_lang = translate_map[translate_to]
 
-    translated = GoogleTranslator(
-        source="auto",
-        target=target_lang
-    ).translate(text)
-
-    return translated
+    return GoogleTranslator(source="auto", target=target_lang).translate(text)
 
 # =========================
 # ОСНОВНОЙ ПРОЦЕСС
@@ -202,55 +105,92 @@ if uploaded_file:
     st.audio(uploaded_file)
 
     if st.button("🚀 Распознать"):
-        audio, path = load_audio(uploaded_file)
 
-        with st.spinner("Определение языка..."):
-            detected_lang = detect_language(audio)
-            st.info(f"Определён язык: {detected_lang}")
+        start_time = time.time()
+
+        audio, duration = load_audio(uploaded_file)
+
+        with st.spinner("Загрузка модели..."):
+            model = load_model(model_size)
 
         with st.spinner("Распознавание..."):
+            segments, info = model.transcribe(
+                audio,
+                language=lang_code
+            )
 
-            if engine == "faster-whisper":
-                text, segments = transcribe_whisper(audio)
+            segments = list(segments)
 
-            elif engine == "vosk":
-                model_name = vosk_models.get(detected_lang, "vosk-model-small-en-us")
-                text, segments = transcribe_vosk(path, model_name)
+        end_time = time.time()
 
-            elif engine == "wav2vec2":
-                model_name = wav2vec_models.get(detected_lang, "facebook/wav2vec2-base-960h")
-                text, segments = transcribe_wav2vec(audio, model_name)
+        # =========================
+        # ТЕКСТ
+        # =========================
+        full_text = " ".join([seg.text for seg in segments])
 
-        translated_text = translate_text(text)
+        # =========================
+        # СПИКЕРЫ (псевдо)
+        # =========================
+        speaker_segments = assign_speakers(segments)
+
+        # =========================
+        # ПЕРЕВОД
+        # =========================
+        translated_text = translate_text(full_text)
+
+        # =========================
+        # СТАТИСТИКА
+        # =========================
+        num_segments = len(segments)
+        avg_segment_length = duration / num_segments if num_segments else 0
+        processing_time = end_time - start_time
 
         st.success("Готово!")
 
         # =========================
-        # ВЫВОД
+        # СТАТИСТИКА
+        # =========================
+        st.subheader("📊 Статистика")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        col1.metric("⏱ Длительность аудио (сек)", round(duration, 2))
+        col2.metric("🧩 Сегментов", num_segments)
+        col3.metric("📏 Ср. длина сегмента", round(avg_segment_length, 2))
+        col4.metric("⚡ Время обработки", round(processing_time, 2))
+
+        st.write(f"🌍 Определён язык: {info.language}")
+
+        # =========================
+        # ТЕКСТ
         # =========================
         st.subheader("📄 Текст")
-        st.write(text)
+        st.write(full_text)
 
+        # =========================
+        # ПЕРЕВОД
+        # =========================
         if translate_to != "Не переводить":
             st.subheader("🌍 Перевод")
             st.write(translated_text)
 
         # =========================
-        # СЕГМЕНТЫ (только whisper)
+        # СПИКЕРЫ
         # =========================
-        if segments:
-            st.subheader("🧩 Сегменты")
-            for seg in segments:
-                st.write(
-                    f"[{seg['start']:.2f} - {seg['end']:.2f}] {seg['text']}"
-                )
+        st.subheader("🗣 Спикеры (эвристика)")
+
+        for seg in speaker_segments:
+            st.write(
+                f"[{seg['start']:.2f}-{seg['end']:.2f}] "
+                f"{seg['speaker']}: {seg['text']}"
+            )
 
         # =========================
         # СКАЧИВАНИЕ
         # =========================
         st.download_button(
             "⬇️ Скачать текст",
-            text,
+            full_text,
             file_name="transcription.txt"
         )
 

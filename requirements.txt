@@ -3,4 +3,3 @@ faster-whisper
 librosa
 soundfile
 numpy
-deep-translator

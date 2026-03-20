@@ -1,62 +1,62 @@
 import streamlit as st
 import whisper
 import tempfile
-import os
+import librosa
+import numpy as np
+import soundfile as sf
 
-st.set_page_config(page_title="Whisper Transcriber", layout="centered")
-
-st.title("Whisper Audio Transcription")
-
-st.write("Загрузите аудиофайл (mp3 или wav), выберите модель и язык.")
+# Заголовок
+st.title("🎙️ Speech-to-Text (Whisper)")
+st.write("Загрузите аудио (WAV или MP3), выберите язык и модель")
 
 # Выбор модели
 model_size = st.selectbox(
-    "Выберите модель Whisper",
+    "Выберите модель",
     ["tiny", "base", "small", "medium", "large"]
 )
 
 # Выбор языка
 language = st.selectbox(
-    "Выберите язык аудио",
-    ["auto", "en", "ru", "de", "fr", "es", "it", "zh"]
+    "Выберите язык",
+    ["auto", "ru", "en", "de", "fr", "es"]
 )
 
+# Загрузка файла
 uploaded_file = st.file_uploader(
-    "Загрузите аудио файл",
-    type=["mp3", "wav"]
+    "Загрузите аудио",
+    type=["wav", "mp3"]
 )
 
-@st.cache_resource
-def load_model(size):
-    return whisper.load_model(size)
+def load_audio(file):
+    """Загрузка аудио без ffmpeg"""
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+        tmp_file.write(file.read())
+        tmp_path = tmp_file.name
+
+    # librosa читает и wav и mp3
+    audio, sr = librosa.load(tmp_path, sr=16000)
+    return audio
 
 if uploaded_file is not None:
-    st.audio(uploaded_file, format="audio/wav")
+    st.audio(uploaded_file)
 
-    if st.button("🚀 Расшифровать"):
+    if st.button("🔍 Расшифровать"):
+        with st.spinner("Загрузка модели..."):
+            model = whisper.load_model(model_size)
+
         with st.spinner("Обработка аудио..."):
+            audio = load_audio(uploaded_file)
 
-            # Сохраняем временный файл
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                tmp.write(uploaded_file.read())
-                tmp_path = tmp.name
+            # Whisper ожидает numpy float32
+            audio = np.array(audio, dtype=np.float32)
 
-            try:
-                model = load_model(model_size)
+            options = {}
+            if language != "auto":
+                options["language"] = language
 
-                options = {}
-                if language != "auto":
-                    options["language"] = language
+            result = model.transcribe(audio, **options)
 
-                result = model.transcribe(tmp_path, **options)
+        st.success("Готово!")
 
-                st.success("✅ Готово!")
-
-                st.subheader("📄 Текст:")
-                st.write(result["text"])
-
-            except Exception as e:
-                st.error(f"Ошибка: {str(e)}")
-
-            finally:
-                os.remove(tmp_path)
+        st.subheader("📄 Текст:")
+        st.write(result["text"])

@@ -1,45 +1,47 @@
 import streamlit as st
-import whisper
+from faster_whisper import WhisperModel
 import tempfile
-
-st.set_page_config(page_title="Whisper Transcriber")
+import librosa
+import numpy as np
 
 st.title("🎙️ Speech-to-Text")
 
-# Модель
 model_size = st.selectbox(
     "Модель",
     ["tiny", "base", "small", "medium"]
 )
 
-# Язык
 language = st.selectbox(
     "Язык",
     ["auto", "ru", "en", "de", "fr", "es"]
 )
 
-uploaded_file = st.file_uploader(
-    "Загрузите аудио",
-    type=["wav", "mp3"]
-)
+uploaded_file = st.file_uploader("Аудио", type=["wav", "mp3"])
+
+@st.cache_resource
+def load_model(size):
+    return WhisperModel(size, compute_type="int8")
 
 if uploaded_file:
     st.audio(uploaded_file)
 
     if st.button("Распознать"):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+        with tempfile.NamedTemporaryFile(delete=False) as tmp:
             tmp.write(uploaded_file.read())
             tmp_path = tmp.name
 
-        with st.spinner("Загрузка модели..."):
-            model = whisper.load_model(model_size)
+        # Загружаем через librosa (БЕЗ ffmpeg)
+        audio, sr = librosa.load(tmp_path, sr=16000)
+        audio = np.array(audio, dtype=np.float32)
 
-        with st.spinner("Распознавание..."):
-            options = {}
-            if language != "auto":
-                options["language"] = language
+        model = load_model(model_size)
 
-            result = model.transcribe(tmp_path, **options)
+        segments, info = model.transcribe(
+            audio,
+            language=None if language == "auto" else language
+        )
 
-        st.success("Готово!")
-        st.write(result["text"])
+        text = " ".join([seg.text for seg in segments])
+
+        st.success("Готово")
+        st.write(text)
